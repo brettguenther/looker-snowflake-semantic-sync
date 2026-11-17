@@ -1,0 +1,127 @@
+name: TPCH_REV_ANALYSIS
+description: Multi-table Snowflake Semantic View for TPC-H revenue and customer order analytics.
+tables:
+  - name: orders
+    description: Customer orders header table
+    synonyms:
+      - sales orders
+      - purchase orders
+    base_table:
+      database: SNOWFLAKE_SAMPLE_DATA
+      schema: TPCH_SF1
+      table: ORDERS
+    primary_key:
+      columns:
+        - o_orderkey
+    dimensions:
+      - name: order_status
+        synonyms:
+          - status
+          - fulfillment status
+        description: Current status code of the order
+        expr: o_orderstatus
+        data_type: VARCHAR(1)
+        unique: false
+        sample_values:
+          - F
+          - O
+          - P
+      - name: order_priority
+        description: Priority tier assigned to the order
+        expr: o_orderpriority
+        data_type: VARCHAR(15)
+      - name: is_expedited
+        description: Whether the order is high priority
+        expr: o_orderpriority IN ('1-URGENT', '2-HIGH')
+        data_type: BOOLEAN
+    time_dimensions:
+      - name: order_date
+        synonyms:
+          - date ordered
+          - purchase date
+        description: Date when the order was placed
+        expr: o_orderdate
+        data_type: DATE
+      - name: order_created_at
+        description: Timestamp when the order record was created
+        expr: o_orderdate::TIMESTAMP_NTZ
+        data_type: TIMESTAMP_NTZ
+    facts:
+      - name: order_total_price_raw
+        description: Unaggregated order total price
+        expr: o_totalprice
+        data_type: NUMBER(12,2)
+        access_modifier: PUBLIC
+      - name: internal_discount_factor
+        expr: o_totalprice * 0.05
+        data_type: NUMBER(12,2)
+        access_modifier: PRIVATE
+    metrics:
+      - name: total_revenue
+        synonyms:
+          - gross revenue
+          - total sales
+        description: Total gross revenue across orders
+        expr: SUM(orders.order_total_price_raw)
+        data_type: NUMBER(38,2)
+      - name: order_count
+        synonyms:
+          - number of orders
+          - total orders
+        description: Count of distinct orders
+        expr: COUNT(DISTINCT orders.o_orderkey)
+        data_type: NUMBER(38,0)
+  - name: customers
+    description: Customer master records
+    base_table:
+      database: SNOWFLAKE_SAMPLE_DATA
+      schema: TPCH_SF1
+      table: CUSTOMER
+    primary_key:
+      columns:
+        - c_custkey
+    dimensions:
+      - name: customer_name
+        synonyms:
+          - client name
+          - account name
+        description: Legal name of the customer
+        expr: c_name
+        data_type: VARCHAR(25)
+      - name: market_segment
+        synonyms:
+          - segment
+          - industry segment
+        description: Market segment of the customer
+        expr: c_mktsegment
+        data_type: VARCHAR(10)
+        sample_values:
+          - AUTOMOBILE
+          - BUILDING
+          - FINANCE
+      - name: account_balance_tier
+        description: Numeric customer account balance
+        expr: c_acctbal
+        data_type: NUMBER(12,2)
+    metrics:
+      - name: customer_count
+        description: Total unique customers
+        expr: COUNT(DISTINCT customers.c_custkey)
+        data_type: NUMBER(38,0)
+relationships:
+  - name: orders_to_customers
+    left_table: orders
+    right_table: customers
+    relationship_columns:
+      - left_column: o_custkey
+        right_column: c_custkey
+    join_type: left_outer
+    relationship_type: many_to_one
+metrics:
+  - name: average_revenue_per_customer
+    synonyms:
+      - arpc
+      - revenue per customer
+    description: Ratio of total order revenue to distinct customers
+    expr: SUM(orders.order_total_price_raw) / NULLIF(COUNT(DISTINCT customers.c_custkey), 0)
+    data_type: NUMBER(38,4)

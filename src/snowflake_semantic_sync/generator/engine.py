@@ -1,0 +1,240 @@
+"""LookML Code Generator & AST Validator for Analytic Model Views (sql_analytic_model_name)."""
+
+from typing import Any, Dict, List
+import lkml
+import lkml.keys
+import lkml.lexer
+import lkml.simple
+
+from snowflake_semantic_sync.models.lookml import (
+    LookMLDimension,
+    LookMLDimensionGroup,
+    LookMLExplore,
+    LookMLMeasure,
+    LookMLView,
+)
+
+# Patch lkml so 'sql_analytic_model_name' is treated as a ';;' expression block (like sql_table_name)
+# and 'synonyms' list literals are always quoted.
+for _mod in (lkml.keys, lkml.lexer, lkml.simple):
+    if hasattr(_mod, "EXPR_BLOCK_KEYS") and "sql_analytic_model_name" not in _mod.EXPR_BLOCK_KEYS:
+        _mod.EXPR_BLOCK_KEYS = _mod.EXPR_BLOCK_KEYS + ("sql_analytic_model_name",)
+    if hasattr(_mod, "QUOTED_LITERAL_KEYS") and "synonyms" not in _mod.QUOTED_LITERAL_KEYS:
+        _mod.QUOTED_LITERAL_KEYS = _mod.QUOTED_LITERAL_KEYS + ("synonyms",)
+
+
+def _dimension_to_dict(dim: LookMLDimension, fields_hidden_by_default: bool = False) -> Dict[str, Any]:
+    d: Dict[str, Any] = {
+        "name": dim.name,
+        "type": dim.type,
+    }
+    if dim.primary_key:
+        d["primary_key"] = "yes"
+    if fields_hidden_by_default:
+        if not dim.hidden:
+            d["hidden"] = "no"
+    elif dim.hidden:
+        d["hidden"] = "yes"
+
+    if not dim.hidden:
+        if dim.label:
+            d["label"] = dim.label
+        if dim.description:
+            d["description"] = dim.description
+        if dim.synonyms:
+            d["synonyms"] = dim.synonyms
+        if dim.tags:
+            d["tags"] = dim.tags
+        if dim.suggestions:
+            d["suggestions"] = dim.suggestions
+        if dim.value_format_name:
+            d["value_format_name"] = dim.value_format_name
+        if dim.group_label:
+            d["group_label"] = dim.group_label
+
+    d["sql"] = dim.sql
+    return d
+
+
+def _dimension_group_to_dict(dg: LookMLDimensionGroup, fields_hidden_by_default: bool = False) -> Dict[str, Any]:
+    d: Dict[str, Any] = {
+        "name": dg.name,
+        "type": dg.type,
+        "timeframes": list(dg.timeframes),
+    }
+    if dg.datatype:
+        d["datatype"] = dg.datatype
+    if dg.convert_tz is not None:
+        d["convert_tz"] = "yes" if dg.convert_tz else "no"
+    if fields_hidden_by_default:
+        if not dg.hidden:
+            d["hidden"] = "no"
+    elif dg.hidden:
+        d["hidden"] = "yes"
+
+    if not dg.hidden:
+        if dg.label:
+            d["label"] = dg.label
+        if dg.description:
+            d["description"] = dg.description
+        if dg.synonyms:
+            d["synonyms"] = dg.synonyms
+        if dg.tags:
+            d["tags"] = dg.tags
+        if dg.group_label:
+            d["group_label"] = dg.group_label
+
+    d["sql"] = dg.sql
+    return d
+
+
+def _measure_to_dict(m: LookMLMeasure, fields_hidden_by_default: bool = False) -> Dict[str, Any]:
+    d: Dict[str, Any] = {
+        "name": m.name,
+        "type": m.type,
+    }
+    if fields_hidden_by_default:
+        if not m.hidden:
+            d["hidden"] = "no"
+    elif m.hidden:
+        d["hidden"] = "yes"
+
+    if not m.hidden:
+        if m.label:
+            d["label"] = m.label
+        if m.description:
+            d["description"] = m.description
+        if m.synonyms:
+            d["synonyms"] = m.synonyms
+        if m.tags:
+            d["tags"] = m.tags
+        if m.value_format_name:
+            d["value_format_name"] = m.value_format_name
+        if m.group_label:
+            d["group_label"] = m.group_label
+
+    d["sql"] = m.sql
+    return d
+
+
+def _view_to_dict(view: LookMLView) -> Dict[str, Any]:
+    v: Dict[str, Any] = {
+        "name": view.view_name,
+        "sql_analytic_model_name": view.sql_analytic_model_name,
+    }
+    if view.fields_hidden_by_default:
+        v["fields_hidden_by_default"] = "yes"
+    if view.dimension_groups:
+        v["dimension_groups"] = [
+            _dimension_group_to_dict(dg, view.fields_hidden_by_default) for dg in view.dimension_groups
+        ]
+    if view.dimensions:
+        v["dimensions"] = [_dimension_to_dict(d, view.fields_hidden_by_default) for d in view.dimensions]
+    if view.measures:
+        v["measures"] = [_measure_to_dict(m, view.fields_hidden_by_default) for m in view.measures]
+    return v
+
+
+def _explore_to_dict(explore: LookMLExplore) -> Dict[str, Any]:
+    e: Dict[str, Any] = {
+        "name": explore.name,
+    }
+    if explore.label:
+        e["label"] = explore.label
+    if explore.description:
+        e["description"] = explore.description
+    return e
+
+
+class LookMLGenerator:
+    """Renders normalized LookML Analytic Model views and explores and validates them with lkml AST."""
+
+    def render_base_view(self, view: LookMLView) -> str:
+        """Renders a machine-managed Analytic Model base view (.base.view.lkml) and validates via lkml."""
+        view_dict = _view_to_dict(view)
+        body = lkml.dump({"views": [view_dict]})
+
+        header_lines = [
+            "# STOP! AUTO-GENERATED BY SNOWFLAKE-SEMANTIC-SYNC. DO NOT EDIT DIRECTLY.",
+            "# Add custom labels, value formats, or visibility overrides in views/curated/.",
+        ]
+        if view.source_semantic_view:
+            header_lines.append(f"# Source Snowflake Semantic View: {view.source_semantic_view}")
+        if view.description:
+            for desc_line in view.description.strip().splitlines():
+                header_lines.append(f"# Description: {desc_line}")
+
+        rendered = "\n".join(header_lines) + "\n\n" + body.rstrip() + "\n"
+
+        try:
+            parsed = lkml.load(rendered)
+            views_parsed = parsed.get("views") or []
+            if not views_parsed or "sql_analytic_model_name" not in views_parsed[0]:
+                raise ValueError("Missing 'sql_analytic_model_name' in parsed AST.")
+        except Exception as e:
+            raise ValueError(
+                f"Generated LookML for analytic model view '{view.view_name}' failed lkml validation: {e}"
+            ) from e
+
+        return rendered
+
+    def render_base_explore(self, explore: LookMLExplore) -> str:
+        """Renders a machine-managed base explore (.base.explore.lkml) for the Analytic Model view."""
+        explore_dict = _explore_to_dict(explore)
+        ast_payload = {
+            "includes": ["/views/base/*.base.view.lkml"],
+            "explores": [explore_dict],
+        }
+        body = lkml.dump(ast_payload)
+
+        header_lines = [
+            "# STOP! AUTO-GENERATED BY SNOWFLAKE-SEMANTIC-SYNC. DO NOT EDIT DIRECTLY.",
+        ]
+        if explore.source_semantic_view:
+            header_lines.append(f"# Source Snowflake Semantic View: {explore.source_semantic_view}")
+
+        rendered = "\n".join(header_lines) + "\n\n" + body.rstrip() + "\n"
+
+        try:
+            lkml.load(rendered)
+        except Exception as e:
+            raise ValueError(
+                f"Generated LookML for explore '{explore.name}' failed lkml validation: {e}"
+            ) from e
+
+        return rendered
+
+    def render_curated_refinement(self, view: LookMLView) -> str:
+        """Renders a human-owned curated refinement view (+view) for overriding labels, formats, and drill fields."""
+        rendered = (
+            f"# HUMAN CURATED REFINEMENT LAYER\n"
+            f"# Refines machine-generated Analytic Model base view without modifying base files directly.\n"
+            f"# Notes for Looker Analytic Model views (sql_analytic_model_name):\n"
+            f"#   - Supported field types: string, number, date, time, date_time, datetime, yesno, and dimension_group (type: time).\n"
+            f"#   - Derived measures (type: number) referencing base measures automatically compile to AGG(...).\n"
+            f"#   - Derived dimensions may only reference columns/dimensions from the same Snowflake logical entity.\n"
+            f'include: "/views/base/{view.view_name}.base.view.lkml"\n\n'
+            f"view: +{view.view_name} {{\n"
+            f"  # Override labels, descriptions, value_format_name, drill_fields, or hidden flags below\n"
+            f"}}\n"
+        )
+        try:
+            lkml.load(rendered)
+        except Exception as e:
+            raise ValueError(f"Generated LookML refinement for '{view.view_name}' failed validation: {e}") from e
+        return rendered
+
+    def render_model(self, model_name: str, connection_name: str, views: List[LookMLView]) -> str:
+        """Renders the starter LookML model file including curated view refinements and base explores."""
+        rendered = (
+            f"# LookML Model Definition for Snowflake Semantic Views\n"
+            f'connection: "{connection_name}"\n\n'
+            f'include: "/views/base/*.base.view.lkml"\n'
+            f'include: "/views/curated/*.view.lkml"\n'
+            f'include: "/explores/base/*.base.explore.lkml"\n'
+        )
+        try:
+            lkml.load(rendered)
+        except Exception as e:
+            raise ValueError(f"Generated model '{model_name}' failed validation: {e}") from e
+        return rendered

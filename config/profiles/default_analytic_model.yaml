@@ -1,0 +1,99 @@
+# Declarative Semantic Mapping Profile for Looker Analytic Models (sql_analytic_model_name)
+profile_name: "default_analytic_model"
+description: "Maps Snowflake Semantic Views (via SYSTEM$READ_YAML_FROM_SEMANTIC_VIEW) to LookML Analytic Model views and explores"
+
+# Scoping for sql_analytic_model_name:
+# - "database_schema": emits <DATABASE>.<SCHEMA>.<SEMANTIC_VIEW> (recommended; immune to connection default schema differences)
+# - "schema": emits <SCHEMA>.<SEMANTIC_VIEW>
+# - "unqualified": emits <SEMANTIC_VIEW>
+qualify_analytic_model_name: "database_schema"
+
+# Quote identifiers in sql_analytic_model_name (e.g., "DB"."SCHEMA"."VIEW")
+quote_identifiers: false
+
+# Whether base views hide fields by default until exposed in curated refinements
+fields_hidden_by_default: false
+
+# Whether to emit Snowflake FACTS as hidden LookML dimensions (default false: Snowflake semantic queries
+# prohibit mixing FACTS and METRICS in the same SELECT ... AGG() query)
+include_facts: false
+
+# Prefix dimension/metric names with <logical_table>_ only when a name collides across logical tables
+disambiguate_colliding_names: true
+
+# Qualify SQL references as ${TABLE}.<LOGICAL_TABLE>.<FIELD> when raw field names collide across logical tables
+qualify_colliding_sql: true
+
+# Emit LookML dimension_group (type: time) for DATE and TIMESTAMP* semantic dimensions
+# (Empirically verified on Looker 26.22+ with Snowflake Semantic Views; TIME stays a regular dimension)
+use_dimension_groups: true
+default_timeframes:
+  - raw
+  - time
+  - date
+  - week
+  - month
+  - quarter
+  - year
+date_timeframes:
+  - raw
+  - date
+  - week
+  - month
+  - quarter
+  - year
+
+# Automatically generate a machine-managed base Explore (.base.explore.lkml) per Semantic View
+generate_base_explores: true
+
+# Snowflake data_type -> LookML analytic model field type mapping
+# Note: Looker sql_analytic_model_name views restrict fields strictly to:
+# string, number, date, time, date_time, datetime, yesno
+type_mappings:
+  VARCHAR: "string"
+  TEXT: "string"
+  STRING: "string"
+  CHAR: "string"
+  CHARACTER: "string"
+  NVARCHAR: "string"
+  BINARY: "string"
+  VARBINARY: "string"
+  VARIANT: "string"
+  OBJECT: "string"
+  ARRAY: "string"
+  GEOGRAPHY: "string"
+  GEOMETRY: "string"
+  NUMBER: "number"
+  DECIMAL: "number"
+  NUMERIC: "number"
+  INT: "number"
+  INTEGER: "number"
+  BIGINT: "number"
+  SMALLINT: "number"
+  TINYINT: "number"
+  BYTEINT: "number"
+  FLOAT: "number"
+  FLOAT4: "number"
+  FLOAT8: "number"
+  DOUBLE: "number"
+  DOUBLE PRECISION: "number"
+  REAL: "number"
+  FIXED: "number"
+  BOOLEAN: "yesno"
+  BOOL: "yesno"
+  DATE: "date"
+  DATETIME: "date_time"
+  TIMESTAMP: "date_time"
+  TIMESTAMP_NTZ: "date_time"
+  TIMESTAMP_LTZ: "date_time"
+  TIMESTAMP_TZ: "date_time"
+  TIME: "time"
+
+# Optional value_format_name inference rules for measures (matched in order against lowercase field name)
+measure_value_format_rules:
+  - pattern: "(?:^|_)(?:revenue|sales|price|cost|spend|amount|mrr|arr|acv|gmv|profit|usd)(?:$|_)"
+    value_format_name: "usd"
+  - pattern: "(?:^|_)(?:pct|percent|percentage|rate|ratio|margin|share)(?:$|_)"
+    value_format_name: "percent_2"
+  - pattern: "(?:^|_)(?:count|cnt|total_orders|total_users|total_customers|quantity|qty|units)(?:$|_)"
+    value_format_name: "decimal_0"

@@ -1,0 +1,41 @@
+# Snowflake Semantic View -> LookML (sql_analytic_model_name) Sync Configuration
+snowflake_account: "${SNOWFLAKE_ACCOUNT:-}"
+snowflake_user: "${SNOWFLAKE_USER:-}"
+snowflake_role: "${SNOWFLAKE_ROLE:-}"
+snowflake_warehouse: "${SNOWFLAKE_WAREHOUSE:-}"
+snowflake_database: "${SNOWFLAKE_DATABASE:-}"
+snowflake_schema: "${SNOWFLAKE_SCHEMA:-PUBLIC}"
+
+# Auth mode: "key_pair" | "oauth" | "oauth_client_credentials" | "externalbrowser"
+snowflake_auth_mode: "${SNOWFLAKE_AUTH_MODE:-key_pair}"
+
+# Key-Pair credentials (used when snowflake_auth_mode == "key_pair")
+snowflake_private_key_path: "${SNOWFLAKE_PRIVATE_KEY_PATH:-}"
+snowflake_private_key_raw: "${SNOWFLAKE_PRIVATE_KEY_RAW:-}"
+snowflake_private_key_passphrase: "${SNOWFLAKE_PRIVATE_KEY_PASSPHRASE:-}"
+
+# OAuth credentials (used when snowflake_auth_mode == "oauth" or "oauth_client_credentials")
+snowflake_oauth_token: "${SNOWFLAKE_OAUTH_TOKEN:-}"
+snowflake_oauth_client_id: "${SNOWFLAKE_OAUTH_CLIENT_ID:-}"
+snowflake_oauth_client_secret: "${SNOWFLAKE_OAUTH_CLIENT_SECRET:-}"
+snowflake_oauth_token_url: "${SNOWFLAKE_OAUTH_TOKEN_URL:-}"
+snowflake_oauth_scope: "${SNOWFLAKE_OAUTH_SCOPE:-}"
+
+# Optional explicit list of Semantic Views to sync.
+# If omitted or empty, all Semantic Views in <snowflake_database>.<snowflake_schema> are discovered via SHOW SEMANTIC VIEWS.
+semantic_views: []
+
+# Looker Target Configuration
+looker_project_id: "${LOOKER_PROJECT_ID:-snowflake_semantics}"
+connection_name: "${LOOKER_CONNECTION_NAME:-snowflake_default}"
+model_name: "${LOOKER_MODEL_NAME:-snowflake_semantic_model}"
+looker_profile: "${LOOKER_PROFILE:-}"
+looker_dev_branch: "${LOOKER_DEV_BRANCH:-}"
+
+# GitOps Pull Request Configuration
+git_repo: "${GITHUB_REPO:-}"
+git_base_branch: "${GITHUB_BASE_BRANCH:-main}"
+
+# Mapping Profile & Output Directory
+active_profile: "config/profiles/default_analytic_model.yaml"
+output_dir: "output"
