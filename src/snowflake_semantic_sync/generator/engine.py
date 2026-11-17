@@ -210,7 +210,7 @@ class LookMLGenerator:
             f"# HUMAN CURATED REFINEMENT LAYER\n"
             f"# Refines machine-generated Analytic Model base view without modifying base files directly.\n"
             f"# Notes for Looker Analytic Model views (sql_analytic_model_name):\n"
-            f"#   - Supported field types: string, number, date, time, date_time, datetime, yesno, and dimension_group (type: time).\n"
+            f"#   - Supported field types: string, number, date, date_time, datetime, yesno, and dimension_group (type: time).\n"
             f"#   - Derived measures (type: number) referencing base measures automatically compile to AGG(...).\n"
             f"#   - Derived dimensions may only reference columns/dimensions from the same Snowflake logical entity.\n"
             f'include: "/views/base/{view.view_name}.base.view.lkml"\n\n'

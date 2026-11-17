@@ -4,6 +4,11 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 import yaml
 
+from snowflake_semantic_sync.identifiers import (
+    canonical_snowflake_identifier,
+    format_sql_identifier,
+)
+
 
 def _normalize_synonyms(raw: Any) -> List[str]:
     if not raw:
@@ -92,7 +97,11 @@ class SnowflakeSemanticView(BaseModel):
 
     @property
     def fully_qualified_name(self) -> str:
-        return f"{self.database}.{self.schema_name}.{self.name}"
+        return (
+            f"{format_sql_identifier(self.database)}"
+            f".{format_sql_identifier(self.schema_name)}"
+            f".{format_sql_identifier(self.name)}"
+        )
 
 
 def _parse_field_list(
@@ -104,7 +113,7 @@ def _parse_field_list(
     if not isinstance(raw_items, list):
         return []
     fields: List[SnowflakeSemanticField] = []
-    pk_lookup = {c.lower() for c in (pk_cols or set())}
+    pk_lookup = {canonical_snowflake_identifier(c) for c in (pk_cols or set())}
     for item in raw_items:
         if not isinstance(item, dict):
             continue
@@ -121,7 +130,10 @@ def _parse_field_list(
         # Snowflake emits "private_access" (DDL YAML) or "PRIVATE" (Cortex YAML)
         if access_mod == "PRIVATE" or access_mod == "PRIVATE_ACCESS" or access_mod.startswith("PRIVATE"):
             continue
-        is_pk = (name.lower() in pk_lookup) or (expr.lower() in pk_lookup)
+        is_pk = (
+            canonical_snowflake_identifier(name) in pk_lookup
+            or canonical_snowflake_identifier(expr) in pk_lookup
+        )
         fields.append(
             SnowflakeSemanticField(
                 name=name,

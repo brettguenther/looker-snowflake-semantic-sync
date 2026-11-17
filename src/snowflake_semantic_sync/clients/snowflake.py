@@ -3,7 +3,6 @@
 import base64
 import json
 from pathlib import Path
-import re
 from typing import Any, Callable, Dict, List, Optional
 import urllib.error
 import urllib.parse
@@ -13,23 +12,13 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 import snowflake.connector
 
+from snowflake_semantic_sync.identifiers import validate_snowflake_identifier
 from snowflake_semantic_sync.models.snowflake import (
     SnowflakeSemanticView,
     parse_semantic_view_yaml,
 )
 
-_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 SUPPORTED_AUTH_MODES = ("key_pair", "oauth", "oauth_client_credentials", "externalbrowser")
-
-
-def validate_snowflake_identifier(identifier: str, label: str = "identifier") -> str:
-    """Validates a Snowflake identifier against a strict allowlist to prevent SQL injection."""
-    cleaned = (identifier or "").strip()
-    if not cleaned or not _SAFE_IDENTIFIER_RE.match(cleaned):
-        raise ValueError(
-            f"Invalid Snowflake {label} '{identifier}'. Only alphanumeric characters, '_', and '$' are allowed."
-        )
-    return cleaned
 
 
 def load_private_key_der_bytes(
@@ -177,9 +166,9 @@ class SnowflakeSemanticClient:
         if self.warehouse:
             kwargs["warehouse"] = self.warehouse
         if self.database:
-            kwargs["database"] = self.database
+            kwargs["database"] = validate_snowflake_identifier(self.database, "database")
         if self.schema:
-            kwargs["schema"] = self.schema
+            kwargs["schema"] = validate_snowflake_identifier(self.schema, "schema")
 
         if self.auth_mode == "key_pair":
             if not self.user:
@@ -222,14 +211,15 @@ class SnowflakeSemanticClient:
         return self._connection_factory(**connect_kwargs)
 
     def list_semantic_views(self, database: str, schema: str) -> List[str]:
-        """Executes SHOW SEMANTIC VIEWS IN SCHEMA <database>.<schema> and returns view names."""
+        """Executes SHOW SEMANTIC VIEWS IN SCHEMA IDENTIFIER(%s) and returns raw view names."""
         safe_db = validate_snowflake_identifier(database, "database")
         safe_schema = validate_snowflake_identifier(schema, "schema")
+        schema_fqn = f"{safe_db}.{safe_schema}"
 
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"SHOW SEMANTIC VIEWS IN SCHEMA {safe_db}.{safe_schema}")
+                cur.execute("SHOW SEMANTIC VIEWS IN SCHEMA IDENTIFIER(%s)", (schema_fqn,))
                 col_names = [desc[0].lower() for desc in (cur.description or [])]
                 name_idx = col_names.index("name") if "name" in col_names else 1
                 rows = cur.fetchall() or []
@@ -239,8 +229,8 @@ class SnowflakeSemanticClient:
                         val = row.get("name") or row.get("NAME")
                     else:
                         val = row[name_idx] if len(row) > name_idx else None
-                    if val:
-                        views.append(str(val).strip())
+                    if val is not None and str(val).strip():
+                        views.append(str(val))
                 return views
         finally:
             conn.close()
@@ -275,6 +265,7 @@ class SnowflakeSemanticClient:
         """Discovers and extracts Snowflake Semantic Views into normalized AST models."""
         safe_db = validate_snowflake_identifier(database, "database")
         safe_schema = validate_snowflake_identifier(schema, "schema")
+        schema_fqn = f"{safe_db}.{safe_schema}"
 
         target_names = (
             [validate_snowflake_identifier(v, "semantic view") for v in view_names if v and v.strip()]
@@ -286,7 +277,7 @@ class SnowflakeSemanticClient:
         try:
             with conn.cursor() as cur:
                 if not target_names:
-                    cur.execute(f"SHOW SEMANTIC VIEWS IN SCHEMA {safe_db}.{safe_schema}")
+                    cur.execute("SHOW SEMANTIC VIEWS IN SCHEMA IDENTIFIER(%s)", (schema_fqn,))
                     col_names = [desc[0].lower() for desc in (cur.description or [])]
                     name_idx = col_names.index("name") if "name" in col_names else 1
                     for row in cur.fetchall() or []:
@@ -295,8 +286,10 @@ class SnowflakeSemanticClient:
                             if isinstance(row, dict)
                             else (row[name_idx] if len(row) > name_idx else None)
                         )
-                        if val:
-                            target_names.append(validate_snowflake_identifier(str(val), "semantic view"))
+                        if val is not None and str(val).strip():
+                            target_names.append(
+                                validate_snowflake_identifier(str(val), "semantic view", from_metadata=True)
+                            )
 
                 semantic_views: List[SnowflakeSemanticView] = []
                 for v_name in target_names:

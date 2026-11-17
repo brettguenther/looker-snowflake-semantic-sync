@@ -4,9 +4,14 @@ from collections import Counter
 import re
 from typing import List, Optional
 
+from snowflake_semantic_sync.identifiers import (
+    canonical_snowflake_identifier,
+    format_sql_identifier,
+    unquote_snowflake_identifier,
+)
 from snowflake_semantic_sync.mapping.profile import MappingProfile
 from snowflake_semantic_sync.models.lookml import (
-    ALLOWED_ANALYTIC_MODEL_FIELD_TYPES,
+    ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES,
     LookMLDimension,
     LookMLDimensionGroup,
     LookMLExplore,
@@ -21,7 +26,10 @@ from snowflake_semantic_sync.models.snowflake import (
 
 def to_snake_case(name: str) -> str:
     """Converts a Snowflake identifier or CamelCase string into clean LookML snake_case."""
-    cleaned = name.strip().strip('"')
+    try:
+        cleaned, _ = unquote_snowflake_identifier(name)
+    except ValueError:
+        cleaned = name.strip().strip('"')
     # Handle camelCase -> snake_case transitions if mixed case
     if any(c.islower() for c in cleaned) and any(c.isupper() for c in cleaned):
         cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cleaned)
@@ -54,29 +62,32 @@ class SemanticModelMapper:
         self.profile = profile
 
     def _format_sql_analytic_model_name(self, sv: SnowflakeSemanticView) -> str:
-        def _q(ident: str) -> str:
-            raw = ident.strip().strip('"')
-            return f'"{raw}"' if self.profile.quote_identifiers else raw
-
+        force_quote = bool(self.profile.quote_identifiers)
         mode = (self.profile.qualify_analytic_model_name or "database_schema").lower()
         if mode == "database_schema" and sv.database and sv.schema_name:
-            return f"{_q(sv.database)}.{_q(sv.schema_name)}.{_q(sv.name)}"
+            return (
+                f"{format_sql_identifier(sv.database, force_quote=force_quote)}"
+                f".{format_sql_identifier(sv.schema_name, force_quote=force_quote)}"
+                f".{format_sql_identifier(sv.name, force_quote=force_quote)}"
+            )
         if mode == "schema" and sv.schema_name:
-            return f"{_q(sv.schema_name)}.{_q(sv.name)}"
-        return _q(sv.name)
+            return (
+                f"{format_sql_identifier(sv.schema_name, force_quote=force_quote)}"
+                f".{format_sql_identifier(sv.name, force_quote=force_quote)}"
+            )
+        return format_sql_identifier(sv.name, force_quote=force_quote)
 
     def _map_data_type(self, raw_type: str, kind: str) -> str:
+        base = normalize_snowflake_base_type(raw_type)
         if kind == "time_dimension":
-            base = normalize_snowflake_base_type(raw_type)
             if base == "DATE":
                 return "date"
             if base == "TIME":
-                return "time"
+                return "string"
             return "date_time"
 
-        base = normalize_snowflake_base_type(raw_type)
         mapped = self.profile.type_mappings.get(base, "string").lower()
-        if mapped not in ALLOWED_ANALYTIC_MODEL_FIELD_TYPES:
+        if mapped not in ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES:
             return "string"
         return mapped
 
@@ -110,19 +121,61 @@ class SemanticModelMapper:
                 break
         return stem
 
+    def _ensure_unique_lookml_name(
+        self,
+        base_name: str,
+        used_names: set[str],
+        suffix_hint: Optional[str] = None,
+    ) -> str:
+        """Guarantees a deterministic unique LookML identifier without silently dropping fields."""
+        if base_name not in used_names:
+            return base_name
+        if suffix_hint:
+            hinted = f"{base_name}_{suffix_hint}"
+            if hinted not in used_names:
+                return hinted
+        idx = 2
+        while f"{base_name}_{idx}" in used_names:
+            idx += 1
+        return f"{base_name}_{idx}"
+
+    def _ensure_unique_dimension_group_name(
+        self,
+        candidate_name: str,
+        timeframes: List[str],
+        used_names: set[str],
+        other_reserved: set[str],
+    ) -> str:
+        """Chooses a collision-free dimension_group name considering both stem and expanded timeframe names."""
+        blocked = used_names | other_reserved
+        stem = self._choose_dimension_group_name(candidate_name, timeframes, blocked)
+        stem_expanded = {f"{stem}_{tf}" for tf in timeframes}
+        if stem not in used_names and not (stem_expanded & used_names):
+            return stem
+        idx = 2
+        while True:
+            alt = f"{candidate_name}_{idx}"
+            alt_expanded = {f"{alt}_{tf}" for tf in timeframes}
+            if alt not in blocked and not (alt_expanded & blocked):
+                return alt
+            idx += 1
+
     def _format_field_sql(
         self,
         field: SnowflakeSemanticField,
-        raw_name_counts: Counter,
+        canonical_name_counts: Counter,
     ) -> str:
-        """Formats ${TABLE}.<FIELD> or ${TABLE}.<LOGICAL_TABLE>.<FIELD> when raw names collide across entities."""
+        """Formats ${TABLE}.<FIELD> or ${TABLE}.<LOGICAL_TABLE>.<FIELD> when canonical SQL names collide."""
+        sql_field = format_sql_identifier(field.name)
+        canonical = canonical_snowflake_identifier(field.name)
         if (
             self.profile.qualify_colliding_sql
-            and raw_name_counts[field.name.lower()] > 1
+            and canonical_name_counts[canonical] > 1
             and field.logical_table
         ):
-            return f"${{TABLE}}.{field.logical_table}.{field.name}"
-        return f"${{TABLE}}.{field.name}"
+            sql_table = format_sql_identifier(field.logical_table)
+            return f"${{TABLE}}.{sql_table}.{sql_field}"
+        return f"${{TABLE}}.{sql_field}"
 
     def map_semantic_view_to_lookml_view(self, sv: SnowflakeSemanticView) -> LookMLView:
         """Converts a SnowflakeSemanticView into a LookMLView using sql_analytic_model_name."""
@@ -143,42 +196,34 @@ class SemanticModelMapper:
 
         metric_candidates.extend(sv.model_metrics)
 
-        # Count occurrences of snake_case and raw names across all fields to detect collisions
+        # Count occurrences of LookML snake_case names and Snowflake canonical SQL names to detect collisions
         all_candidates = dim_candidates + metric_candidates
         all_snake_counts = Counter(to_snake_case(f.name) for f in all_candidates)
-        raw_name_counts = Counter(f.name.lower() for f in all_candidates)
+        canonical_name_counts = Counter(canonical_snowflake_identifier(f.name) for f in all_candidates)
 
-        # Precompute non-temporal field names so dimension_group suffix stripping never collides
-        reserved_names: set[str] = set()
-        for f in all_candidates:
+        def _initial_lkml_name(f: SnowflakeSemanticField) -> str:
             base_snake = to_snake_case(f.name)
-            if self.profile.disambiguate_colliding_names and all_snake_counts[base_snake] > 1 and f.logical_table:
-                resolved = f"{to_snake_case(f.logical_table)}_{base_snake}"
-            else:
-                resolved = base_snake
-            lkml_type = self._map_data_type(f.data_type, f.kind) if f.kind != "metric" else "number"
-            if f.kind == "metric" or not self._is_dimension_group_candidate(f, lkml_type):
-                reserved_names.add(resolved)
-
-        dimension_groups: List[LookMLDimensionGroup] = []
-        dimensions: List[LookMLDimension] = []
-        seen_field_names: set[str] = set()
-
-        for field in dim_candidates:
-            base_snake = to_snake_case(field.name)
             if (
                 self.profile.disambiguate_colliding_names
                 and all_snake_counts[base_snake] > 1
-                and field.logical_table
+                and f.logical_table
             ):
-                lkml_name = f"{to_snake_case(field.logical_table)}_{base_snake}"
-            else:
-                lkml_name = base_snake
+                return f"{to_snake_case(f.logical_table)}_{base_snake}"
+            return base_snake
 
+        # Precompute ALL initial candidate names (including other dimension_groups) so suffix stripping never clobbers
+        candidate_resolved_counts = Counter(_initial_lkml_name(f) for f in all_candidates)
+
+        dimension_groups: List[LookMLDimensionGroup] = []
+        dimensions: List[LookMLDimension] = []
+        used_lkml_names: set[str] = set()
+
+        for field in dim_candidates:
+            lkml_name = _initial_lkml_name(field)
             lkml_type = self._map_data_type(field.data_type, field.kind)
             is_hidden_fact = field.kind == "fact"
             group_label = to_title_label(field.logical_table) if (multi_table and field.logical_table) else None
-            sql_expr = self._format_field_sql(field, raw_name_counts)
+            sql_expr = self._format_field_sql(field, canonical_name_counts)
 
             if self._is_dimension_group_candidate(field, lkml_type):
                 sf_base_type = normalize_snowflake_base_type(field.data_type)
@@ -192,12 +237,20 @@ class SemanticModelMapper:
                     # Naive wall-clock timestamps (TIMESTAMP_NTZ / DATETIME) have no TZ offset; disable convert_tz
                     convert_tz = False if sf_base_type in ("TIMESTAMP_NTZ", "DATETIME") else None
 
-                dg_name = self._choose_dimension_group_name(lkml_name, timeframes, reserved_names | seen_field_names)
-                if dg_name in seen_field_names:
-                    continue
-                seen_field_names.add(dg_name)
+                other_reserved = {
+                    name
+                    for name, cnt in candidate_resolved_counts.items()
+                    if name != lkml_name or cnt > 1
+                }
+                dg_name = self._ensure_unique_dimension_group_name(
+                    lkml_name,
+                    timeframes,
+                    used_lkml_names,
+                    other_reserved,
+                )
+                used_lkml_names.add(dg_name)
                 for tf in timeframes:
-                    seen_field_names.add(f"{dg_name}_{tf}")
+                    used_lkml_names.add(f"{dg_name}_{tf}")
 
                 dimension_groups.append(
                     LookMLDimensionGroup(
@@ -215,13 +268,12 @@ class SemanticModelMapper:
                 )
                 continue
 
-            if lkml_name in seen_field_names:
-                continue
-            seen_field_names.add(lkml_name)
+            unique_dim_name = self._ensure_unique_lookml_name(lkml_name, used_lkml_names)
+            used_lkml_names.add(unique_dim_name)
 
             dimensions.append(
                 LookMLDimension(
-                    name=lkml_name,
+                    name=unique_dim_name,
                     type=lkml_type,
                     sql=sql_expr,
                     primary_key=False,
@@ -234,32 +286,32 @@ class SemanticModelMapper:
             )
 
         measures: List[LookMLMeasure] = []
-        seen_measure_names: set[str] = set()
 
         for field in metric_candidates:
             base_snake = to_snake_case(field.name)
             if (
                 self.profile.disambiguate_colliding_names
-                and (all_snake_counts[base_snake] > 1 or base_snake in seen_field_names)
+                and (all_snake_counts[base_snake] > 1 or base_snake in used_lkml_names)
                 and field.logical_table
             ):
-                lkml_name = f"{to_snake_case(field.logical_table)}_{base_snake}"
-            elif base_snake in seen_field_names:
-                lkml_name = f"{base_snake}_metric"
+                candidate_measure_name = f"{to_snake_case(field.logical_table)}_{base_snake}"
             else:
-                lkml_name = base_snake
+                candidate_measure_name = base_snake
 
-            if lkml_name in seen_measure_names:
-                continue
-            seen_measure_names.add(lkml_name)
+            unique_measure_name = self._ensure_unique_lookml_name(
+                candidate_measure_name,
+                used_lkml_names,
+                suffix_hint="metric",
+            )
+            used_lkml_names.add(unique_measure_name)
 
             group_label = to_title_label(field.logical_table) if (multi_table and field.logical_table) else None
-            val_fmt = self._infer_measure_value_format(lkml_name)
-            sql_expr = self._format_field_sql(field, raw_name_counts)
+            val_fmt = self._infer_measure_value_format(unique_measure_name)
+            sql_expr = self._format_field_sql(field, canonical_name_counts)
 
             measures.append(
                 LookMLMeasure(
-                    name=lkml_name,
+                    name=unique_measure_name,
                     type="number",
                     sql=sql_expr,
                     hidden=False,

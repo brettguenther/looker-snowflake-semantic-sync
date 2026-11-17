@@ -63,7 +63,7 @@ class MappingProfile(BaseModel):
             "TIMESTAMP_NTZ": "date_time",
             "TIMESTAMP_LTZ": "date_time",
             "TIMESTAMP_TZ": "date_time",
-            "TIME": "time",
+            "TIME": "string",
         }
     )
     measure_value_format_rules: List[ValueFormatRule] = Field(default_factory=list)

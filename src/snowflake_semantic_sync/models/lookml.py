@@ -14,6 +14,9 @@ ALLOWED_ANALYTIC_MODEL_FIELD_TYPES: Set[str] = {
     "yesno",
 }
 
+# Standalone dimensions and measures cannot use 'time' (Looker requires dimension_group for type: time)
+ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES: Set[str] = ALLOWED_ANALYTIC_MODEL_FIELD_TYPES - {"time"}
+
 
 class LookMLDimension(BaseModel):
     """Represents a LookML dimension inside a sql_analytic_model_name view."""
@@ -34,10 +37,15 @@ class LookMLDimension(BaseModel):
     @classmethod
     def validate_analytic_model_type(cls, v: str) -> str:
         normalized = v.strip().lower()
-        if normalized not in ALLOWED_ANALYTIC_MODEL_FIELD_TYPES:
+        if normalized == "time":
+            raise ValueError(
+                "LookML dimension type 'time' may only be used in a dimension_group, not a standalone dimension "
+                "(map Snowflake TIME columns to 'string')."
+            )
+        if normalized not in ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES:
             raise ValueError(
                 f"Unsupported LookML field type '{v}' for sql_analytic_model_name view. "
-                f"Allowed types: {sorted(ALLOWED_ANALYTIC_MODEL_FIELD_TYPES)}"
+                f"Allowed dimension types: {sorted(ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES)}"
             )
         return normalized
 
@@ -88,10 +96,10 @@ class LookMLMeasure(BaseModel):
     @classmethod
     def validate_measure_type(cls, v: str) -> str:
         normalized = v.strip().lower()
-        if normalized not in ALLOWED_ANALYTIC_MODEL_FIELD_TYPES:
+        if normalized == "time" or normalized not in ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES:
             raise ValueError(
                 f"Unsupported LookML measure type '{v}' for sql_analytic_model_name view. "
-                f"Measures on analytic models must use 'number' (or one of {sorted(ALLOWED_ANALYTIC_MODEL_FIELD_TYPES)})."
+                f"Measures on analytic models must use 'number' (or one of {sorted(ALLOWED_ANALYTIC_MODEL_DIMENSION_TYPES)})."
             )
         return normalized
 

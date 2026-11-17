@@ -36,7 +36,7 @@ flowchart LR
 1. **Self-Contained Metadata Extraction**: Queries `SHOW SEMANTIC VIEWS IN SCHEMA <db>.<schema>` and `SELECT SYSTEM$READ_YAML_FROM_SEMANTIC_VIEW('<db>.<schema>.<view>')` to extract logical tables, dimensions, time dimensions, metrics, descriptions, synonyms, sample values, and compiler-inferred data types while excluding `private_access` / `PRIVATE` fields.
 2. **Looker `sql_analytic_model_name` Generation**:
    - Emits fully-qualified `sql_analytic_model_name: <DATABASE>.<SCHEMA>.<SEMANTIC_VIEW> ;;` definitions so views resolve reliably regardless of the Looker connection's default schema.
-   - Enforces Looker's analytic model field type constraints (`string`, `number`, `date`, `time`, `date_time`, `datetime`, `yesno`) and emits `dimension_group` (`type: time`) for `DATE` and `TIMESTAMP*` dimensions (`convert_tz: no` on `DATE` and `TIMESTAMP_NTZ`).
+   - Enforces Looker's analytic model field type constraints (`string`, `number`, `date`, `date_time`, `datetime`, `yesno`, and `dimension_group` `type: time`) — emitting `dimension_group` for `DATE` and `TIMESTAMP*` dimensions (`convert_tz: no` on `DATE` and `TIMESTAMP_NTZ`) and `type: string` for `TIME` columns.
    - Organizes multi-table Semantic View dimensions and metrics using `group_label` per logical entity, disambiguates colliding LookML field names, and qualifies colliding SQL references with 3-part `${TABLE}.<LOGICAL_TABLE>.<FIELD>` syntax.
 3. **Two-Layer Refinement Architecture**:
    - **Machine-Managed Base Layer**: `views/base/*.base.view.lkml` and `explores/base/*.base.explore.lkml` are updated on every sync and validated via `lkml` AST round-tripping.

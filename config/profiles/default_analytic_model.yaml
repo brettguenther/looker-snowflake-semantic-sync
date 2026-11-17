@@ -25,7 +25,7 @@ disambiguate_colliding_names: true
 qualify_colliding_sql: true
 
 # Emit LookML dimension_group (type: time) for DATE and TIMESTAMP* semantic dimensions
-# (Empirically verified on Looker 26.22+ with Snowflake Semantic Views; TIME stays a regular dimension)
+# (Empirically verified on Looker 26.22+ with Snowflake Semantic Views; TIME maps to a string dimension)
 use_dimension_groups: true
 default_timeframes:
   - raw
@@ -48,7 +48,8 @@ generate_base_explores: true
 
 # Snowflake data_type -> LookML analytic model field type mapping
 # Note: Looker sql_analytic_model_name views restrict fields strictly to:
-# string, number, date, time, date_time, datetime, yesno
+# string, number, date, time (dimension_group only), date_time, datetime, yesno
+# Snowflake TIME has no date component and Looker rejects standalone dimension { type: time }, so TIME maps to string.
 type_mappings:
   VARCHAR: "string"
   TEXT: "string"
@@ -87,7 +88,7 @@ type_mappings:
   TIMESTAMP_NTZ: "date_time"
   TIMESTAMP_LTZ: "date_time"
   TIMESTAMP_TZ: "date_time"
-  TIME: "time"
+  TIME: "string"
 
 # Optional value_format_name inference rules for measures (matched in order against lowercase field name)
 measure_value_format_rules:
